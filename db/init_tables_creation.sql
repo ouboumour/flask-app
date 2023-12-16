@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS utilisateur (
     prenom VARCHAR(46),
     nom VARCHAR(46),
     tel VARCHAR(15),
-    username VARCHAR(46),
+    username VARCHAR(46) UNIQUE ,
     password VARCHAR(46),
     profile_id INT,
     FOREIGN KEY (profile_id) REFERENCES profile(id)

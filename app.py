@@ -1,5 +1,5 @@
 import mysql.connector
-from flask import Flask, request, render_template
+from flask import Flask, request, render_template, redirect, url_for, session
 
 app = Flask(__name__)
 app.secret_key = "admin123"
@@ -13,37 +13,100 @@ connection = mysql.connector.connect(
 )
 
 
-def fetchAll(tableName):
+# def toListMatrix():
+
+
+def check_login():
+    if not session.get('logged_in', False) and request.endpoint not in ['login']:
+        return redirect(url_for('login'))
+
+
+app.before_request(check_login)
+
+if __name__ == "_main_":
+    app.run(debug=True)
+
+
+def get_columns(cursor):
+    return [desc[0] for desc in cursor.description]
+
+
+def fetchAll(table_name):
     cursor = connection.cursor()
-    query = f"SELECT * FROM {tableName}"
+    query = f"SELECT * FROM {table_name}"
     cursor.execute(query)
-    return cursor.fetchall()
+    return get_columns(cursor), cursor.fetchall()
 
 
-@app.route("/")
-def index():
-    return "<h1>Home</h1>"
+def are_credentials_ok(username, password):
+    cursor = connection.cursor()
+    query = f'''SELECT * from utilisateur WHERE username LIKE '{username}' AND password LIKE '{password}' LIMIT 1;'''
+    cursor.execute(query)
+    return cursor.fetchone() is not None
+
+
+@app.route('/')
+def root():
+    return redirect(url_for('login'))
+
+
+@app.route("/login", methods=['GET', 'POST'])
+def login():
+    if session.get('logged_in', False):
+        return redirect(url_for('home'))
+
+    if len(request.form) and are_credentials_ok(request.form['email'], request.form['password']):
+        session['logged_in'] = True
+        return redirect(url_for('home'))
+
+    return render_template("login-form.html",
+                           error_message="" if request.method == 'GET' else "Invalid username or password")
+
+@app.route("/logout", methods=['GET', 'POST'])
+def logout():
+    session['logged_in'] = False
+    return  redirect(url_for('login'))
+
+@app.route("/home")
+def home():
+    return render_template("home.html")
 
 
 @app.route("/categories")
 def afficher_categories():
-    return fetchAll("categorie")
+    columns, rows = fetchAll("categorie")
+    return render_template("rows-table.html",
+                           page_name='Catégorie',
+                           title="Liste des catégories",
+                           columns=columns,
+                           rows=rows
+                           )
 
 
 @app.route("/cours")
 def afficher_cours():
     cursor = connection.cursor()
     query = f'''
-        SELECT c.id, c.nom, c.description, c.cout_seance, m.nom, n.nom, cat.nom FROM cours c 
-                              INNER JOIN niveau_cours nc on c.id = nc.cours_id 
-                              INNER JOIN niveau n on nc.niveau_id = n.id 
-                              INNER JOIN categorie cat on n.categorie_id = cat.id   
-                              INNER JOIN matiere m on c.matiere_id = m.id;
+        SELECT c.id, 
+               c.nom, 
+               c.description as 'Description du cours', 
+               CONCAT(c.cout_seance, ' DH') as 'Prix de la séance', 
+               m.nom as 'Nom de la matière',
+               n.nom as 'Niveau',
+               cat.nom as 'Catégorie' 
+        FROM cours c 
+              INNER JOIN niveau_cours nc on c.id = nc.cours_id 
+              INNER JOIN niveau n on nc.niveau_id = n.id 
+              INNER JOIN categorie cat on n.categorie_id = cat.id   
+              INNER JOIN matiere m on c.matiere_id = m.id;
         '''
-
     cursor.execute(query)
-    return cursor.fetchall()
-
+    return render_template("rows-table.html",
+                           page_name='Cours',
+                           title="Liste des cours",
+                           columns=get_columns(cursor),
+                           rows=cursor.fetchall()
+                           )
 
 @app.route("/cours/categories/<categorie>")
 def afficher_cours_par_categorie(categorie):
@@ -111,10 +174,16 @@ def afficher_cours_par_matiere(matiere_id):
     cursor.execute(query)
     return cursor.fetchall()
 
+
 @app.route("/enseignants")
 def afficher_enseignants():
-    return fetchAll("enseignant")
-
+    columns, rows = fetchAll("enseignant")
+    return render_template("rows-table.html",
+                           page_name='Enseignants',
+                           title="Liste des enseignants",
+                           columns=columns,
+                           rows=rows
+                           )
 
 @app.route("/enseignants/seance/<seance_id>")
 def afficher_enseignants_par_seance(seance_id):
@@ -129,7 +198,13 @@ def afficher_enseignants_par_seance(seance_id):
 
 @app.route("/etudiants")
 def afficher_etudiants():
-    return fetchAll("etudiant")
+    columns, rows = fetchAll("etudiant")
+    return render_template("rows-table.html",
+                           page_name='Etudiants',
+                           title="Liste des étudiants",
+                           columns=columns,
+                           rows=rows
+                           )
 
 
 @app.route("/etudiants/seances/<seance_id>")
@@ -151,7 +226,15 @@ def afficher_inscriptions():
     en_attente = request.args.get('en_attente')
     cursor = connection.cursor()
     query = f'''
-                SELECT e.id, e.prenom, e.nom, i.credit, i.en_attente, c.nom, c.cout_seance FROM inscription i
+                SELECT 
+                    e.id,
+                    e.prenom, 
+                    e.nom, 
+                    i.credit,
+                    i.en_attente as 'En attente d''un groupe ?',
+                    c.nom,
+                    c.cout_seance as 'Prix de la séance'
+                FROM inscription i
                     INNER JOIN etudiant e on e.id = i.etudiant_id
                     INNER JOIN cours c on c.id = i.cours_id
                 '''
@@ -160,7 +243,12 @@ def afficher_inscriptions():
         query += f'''WHERE i.en_attente = {en_attente}'''
 
     cursor.execute(query)
-    return cursor.fetchall()
+    return render_template("rows-table.html",
+                           page_name='Inscriptions',
+                           title="Liste des inscriptions",
+                           columns=get_columns(cursor),
+                           rows=cursor.fetchall()
+                           )
 
 
 @app.route("/inscriptions/etudiants/<etudiant_id>")
@@ -175,6 +263,7 @@ def afficher_inscriptions_par_etudiant(etudiant_id):
 
     cursor.execute(query)
     return cursor.fetchall()
+
 
 @app.route("/inscriptions/cours/<cours_id>")
 def afficher_inscriptions_par_cours(cours_id):
@@ -194,9 +283,17 @@ def afficher_inscriptions_par_cours(cours_id):
     cursor.execute(query)
     return cursor.fetchall()
 
+
 @app.route("/matieres")
 def afficher_matieres():
-    return fetchAll("matiere")
+    columns, rows = fetchAll("matiere")
+    return render_template("rows-table.html",
+                           page_name='Matieres',
+                           title="Liste des matières",
+                           columns=columns,
+                           rows=rows
+                           )
+
 
 @app.route("/matieres/categories/<categorie_id>")
 def afficher_matieres_par_categorie(categorie_id):
@@ -213,6 +310,7 @@ def afficher_matieres_par_categorie(categorie_id):
     cursor.execute(query)
     return cursor.fetchall()
 
+
 @app.route("/matieres/niveau/<niveau_id>")
 def afficher_matieres_par_niveau(niveau_id):
     cursor = connection.cursor()
@@ -225,6 +323,7 @@ def afficher_matieres_par_niveau(niveau_id):
     cursor.execute(query)
     return cursor.fetchall()
 
+
 @app.route("/profiles")
 def afficher_profiles():
     return fetchAll("profile")
@@ -232,19 +331,41 @@ def afficher_profiles():
 
 @app.route("/salles")
 def afficher_salles():
-    return fetchAll("salle")
+    columns, rows = fetchAll("salle")
+    return render_template("rows-table.html",
+                           page_name='Salles',
+                           title="Liste des salles",
+                           columns=columns,
+                           rows=rows
+                           )
+
 
 @app.route("/seances")
 def afficher_seances():
     cursor = connection.cursor()
     query = f'''
-        SELECT s.id, s.debut_seance, s.fin_seance, sa.nom, e.prenom, e.nom, c.nom, c.cout_seance FROM seance s 
+        SELECT 
+            s.id,
+            s.debut_seance as 'Début de la séance',
+            s.fin_seance as 'Fin de la séance',
+            sa.nom as 'Salle',
+            e.prenom as 'Prenom de l''enseignant',
+            e.nom as 'Nom de l''enseignant', 
+            c.nom as 'Cours',
+            CONCAT(c.cout_seance, ' DH') as 'Prix de la séance'
+        FROM seance s 
             INNER JOIN salle sa on sa.id = s.salle_id
             INNER JOIN enseignant e on e.id = s.enseignant_id
             INNER JOIN cours c on c.id = s.cours_id
         '''
     cursor.execute(query)
-    return cursor.fetchall()
+    return render_template("rows-table.html",
+                           page_name='Séance',
+                           title="Liste des séances",
+                           columns=get_columns(cursor),
+                           rows=cursor.fetchall()
+                           )
+
 
 @app.route("/seances/enseignant/<enseignant_id>")
 def afficher_seances_par_enseignant(enseignant_id):
@@ -259,6 +380,7 @@ def afficher_seances_par_enseignant(enseignant_id):
     cursor.execute(query)
     return cursor.fetchall()
 
+
 @app.route("/presence/seance/<seance_id>")
 def afficher_feuille_de_presence(seance_id):
     cursor = connection.cursor()
@@ -270,18 +392,26 @@ def afficher_feuille_de_presence(seance_id):
     cursor.execute(query)
     return cursor.fetchall()
 
+
 @app.route("/utilisateurs")
 def afficher_utilisateurs():
     cursor = connection.cursor()
     query = '''
-        SELECT u.prenom, u.nom, u.tel, u.username, u.password, p.nom FROM utilisateur u 
-                              INNER JOIN profile p on u.profile_id = p.id;
+        SELECT
+            u.id,
+            u.prenom,
+            u.nom,
+            u.tel as 'Numéro de téléphone',
+            u.username as 'email',
+            p.nom as 'Profile'
+        FROM utilisateur u 
+            INNER JOIN profile p on u.profile_id = p.id;
         '''
 
     cursor.execute(query)
-    return cursor.fetchall()
-
-
-if __name__ == "_main_":
-    app.debug = True
-    app.run()
+    return render_template("rows-table.html",
+                           page_name='Utilisateurs',
+                           title="Liste des utilisateurs",
+                           columns=get_columns(cursor),
+                           rows=cursor.fetchall()
+                           )
